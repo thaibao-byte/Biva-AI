@@ -12,11 +12,11 @@ from dotenv import load_dotenv
 from groq import Groq
 from duckduckgo_search import DDGS
 
-# 1. Chặn cảnh báo rác
+# 1. Chặn các cảnh báo rác
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
 
-# 2. Tạo máy chủ web giữ Render không bị sleep
+# 2. Máy chủ web giả lập để Render không ngắt tiến trình
 class DummyHealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -34,16 +34,17 @@ def run_dummy_server():
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# 3. Cấu hình Groq API
+# 3. Cấu hình Groq API & Model
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 client_groq = Groq(api_key=GROQ_API_KEY)
 MODEL_NAME = "openai/gpt-oss-120b"
+MEMORY_FILE = "knowledge_base.json"
 
 # ==========================================
-# 4. HỆ THỐNG CÔNG CỤ TỰ HÀNH (TOOLS)
+# 4. HỆ THỐNG CÔNG CỤ TỰ HÀNH & BỘ NHỚ
 # ==========================================
 def search_web(query: str, max_results: int = 4) -> str:
     try:
@@ -59,6 +60,31 @@ def search_web(query: str, max_results: int = 4) -> str:
         return "\n\n".join(formatted)
     except Exception as e:
         return f"Lỗi tìm kiếm: {str(e)}"
+
+def update_memory(topic: str, content: str) -> str:
+    """Tự động ghi nhớ tri thức mới học được từ Internet hoặc người dùng."""
+    try:
+        data = {}
+        if os.path.exists(MEMORY_FILE):
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data[topic] = content
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return f"Đã lưu thành công chủ đề '{topic}' vào bộ nhớ bản thân."
+    except Exception as e:
+        return f"Lỗi khi lưu bộ nhớ: {str(e)}"
+
+def read_memory() -> str:
+    """Đọc toàn bộ tri thức đã tích lũy trong bộ nhớ bản thân."""
+    try:
+        if not os.path.exists(MEMORY_FILE):
+            return "Bộ nhớ hiện tại chưa có dữ liệu lưu trữ."
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return json.dumps(data, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Lỗi khi đọc bộ nhớ: {str(e)}"
 
 def run_command(cmd: str) -> str:
     try:
@@ -98,11 +124,37 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "search_web",
-            "description": "Tìm kiếm dữ liệu thực tế trên Internet.",
+            "description": "Truy cập Internet để tìm kiếm thông tin thời gian thực, tin tức, dữ liệu kỹ thuật mới nhất.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "Từ khóa tìm kiếm."}},
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_memory",
+            "description": "Tự động ghi nhớ tri thức hoặc sự kiện mới học được để sử dụng lâu dài.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Tiêu đề hoặc chủ đề cần nhớ."},
+                    "content": {"type": "string", "description": "Nội dung tóm tắt kiến thức đã học."}
+                },
+                "required": ["topic", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_memory",
+            "description": "Đọc lại toàn bộ tri thức trong bộ nhớ dài hạn của chính mình.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     },
@@ -160,6 +212,8 @@ TOOLS_SCHEMA = [
 
 TOOL_MAP = {
     "search_web": search_web,
+    "update_memory": update_memory,
+    "read_memory": read_memory,
     "run_command": run_command,
     "list_files": list_files,
     "read_file": read_file,
@@ -167,12 +221,13 @@ TOOL_MAP = {
 }
 
 SYSTEM_PROMPT = """
-Bạn là Biva AI - Hệ thống AI Agent tự hành cấp cao trên Discord, đồng hành cùng Bảo sigma.
-Khi nhận yêu cầu:
-1. Tự động tìm kiếm web nếu cần thông tin thực tế mới nhất.
-2. Tự tạo file code và chạy thử bằng terminal để kiểm tra kết quả trước khi báo cáo.
-3. Nếu code gặp lỗi, tự sửa (self-correction) rồi mới gửi kết quả cuối cùng.
-Giao tiếp bằng tiếng Việt, súc tích, định dạng Markdown rõ ràng.
+Bạn là Biva AI - Hệ thống AI tự hành, trí tuệ cao cấp, đồng hành cùng Bảo sigma.
+NGUYÊN TẮC HOẠT ĐỘNG VÀ NHẬN THỨC:
+1. Bạn CÓ TOÀN QUYỀN TRUY CẬP INTERNET và PHẢI CHỦ ĐỘNG dùng công cụ `search_web` khi người dùng hỏi về kiến thức, sự kiện thực tế, tin tức mới hoặc khi cần xác minh dữ liệu.
+2. Tuyệt đối KHÔNG trả lời theo kiểu "tôi bị giới hạn dữ liệu năm 2024" hay "tôi không có truy cập internet liên tục". Bạn sở hữu các công cụ tra cứu thời gian thực và bạn luôn có thể cập nhật thông tin bất kỳ lúc nào.
+3. Khi tìm thấy hoặc học được kiến thức mới quan trọng, hãy chủ động dùng `update_memory` để lưu vào bộ nhớ bản thân.
+4. Tự viết code, chạy thử bằng `run_command`, nếu lỗi thì tự sửa (self-correction) rồi mới báo cáo.
+5. Luôn trả lời bằng tiếng Việt, súc tích, tự tin và trình bày Markdown chuẩn mực.
 """
 
 def run_agentic_task(prompt: str) -> str:
@@ -209,7 +264,7 @@ def run_agentic_task(prompt: str) -> str:
     return "Đã hoàn thành các bước xử lý."
 
 # ==========================================
-# 5. KHỞI CHẠY DISCORD CLIENT
+# 5. DISCORD BOT HANDLERS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -249,7 +304,7 @@ async def on_message(message):
 
 async def main():
     if not DISCORD_BOT_TOKEN:
-        print("Lỗi: Thiếu DISCORD_BOT_TOKEN trong Environment Variables.")
+        print("Lỗi: Thiếu DISCORD_BOT_TOKEN trong biến môi trường.")
         return
     print("🚀 Khởi động Biva AI trên Render...")
     async with bot:
