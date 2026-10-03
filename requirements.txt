@@ -1,3 +1,5 @@
 groq
 python-dotenv
 duckduckgo_search
+discord.py
+nest_asyncio
