@@ -4,21 +4,19 @@ import json
 import warnings
 import subprocess
 import threading
+import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import nest_asyncio
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from groq import Groq
 from duckduckgo_search import DDGS
 
-nest_asyncio.apply()
-
-# 1. Chặn cảnh báo hệ thống
+# 1. Chặn cảnh báo rác
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
 
-# 2. Tạo máy chủ web giả lập để Render không ngắt tiến trình
+# 2. Tạo máy chủ web giữ Render không bị sleep
 class DummyHealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -27,17 +25,16 @@ class DummyHealthCheckServer(BaseHTTPRequestHandler):
         self.wfile.write(b"Biva AI is running 24/7!")
 
     def log_message(self, format, *args):
-        return  # Tắt log HTTP để tránh rối màn hình
+        return
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHealthCheckServer)
     server.serve_forever()
 
-# Chạy web server ở luồng riêng biệt
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# 3. Cấu hình API và Model
+# 3. Cấu hình Groq API
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -238,7 +235,8 @@ async def on_message(message):
     if user_query:
         async with message.channel.typing():
             try:
-                reply = run_agentic_task(user_query)
+                loop = asyncio.get_running_loop()
+                reply = await loop.run_in_executor(None, run_agentic_task, user_query)
                 if len(reply) <= 2000:
                     await message.reply(reply)
                 else:
@@ -249,9 +247,13 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-if __name__ == "__main__":
+async def main():
     if not DISCORD_BOT_TOKEN:
         print("Lỗi: Thiếu DISCORD_BOT_TOKEN trong Environment Variables.")
-    else:
-        print("🚀 Khởi động Biva AI trên Render...")
-        bot.run(DISCORD_BOT_TOKEN)
+        return
+    print("🚀 Khởi động Biva AI trên Render...")
+    async with bot:
+        await bot.start(DISCORD_BOT_TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
