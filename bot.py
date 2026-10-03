@@ -3,6 +3,8 @@ import sys
 import json
 import warnings
 import subprocess
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import nest_asyncio
 import discord
 from discord.ext import commands
@@ -10,14 +12,32 @@ from dotenv import load_dotenv
 from groq import Groq
 from duckduckgo_search import DDGS
 
-# Áp dụng patch async cho môi trường đa luồng/Jupyter
 nest_asyncio.apply()
 
-# 1. Chặn các cảnh báo hệ thống
+# 1. Chặn cảnh báo hệ thống
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
 
-# 2. Tải biến môi trường
+# 2. Tạo máy chủ web giả lập để Render không ngắt tiến trình
+class DummyHealthCheckServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Biva AI is running 24/7!")
+
+    def log_message(self, format, *args):
+        return  # Tắt log HTTP để tránh rối màn hình
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), DummyHealthCheckServer)
+    server.serve_forever()
+
+# Chạy web server ở luồng riêng biệt
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# 3. Cấu hình API và Model
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -26,7 +46,7 @@ client_groq = Groq(api_key=GROQ_API_KEY)
 MODEL_NAME = "openai/gpt-oss-120b"
 
 # ==========================================
-# 3. HỆ THỐNG CÔNG CỤ TỰ HÀNH (TOOLS)
+# 4. HỆ THỐNG CÔNG CỤ TỰ HÀNH (TOOLS)
 # ==========================================
 def search_web(query: str, max_results: int = 4) -> str:
     try:
@@ -151,11 +171,11 @@ TOOL_MAP = {
 
 SYSTEM_PROMPT = """
 Bạn là Biva AI - Hệ thống AI Agent tự hành cấp cao trên Discord, đồng hành cùng Bảo sigma.
-Khi nhận yêu cầu, bạn có thể:
+Khi nhận yêu cầu:
 1. Tự động tìm kiếm web nếu cần thông tin thực tế mới nhất.
-2. Tự tạo file code và chạy thử bằng terminal để chắc chắn code hoạt động trước khi gửi kết quả.
-3. Nếu code lỗi, tự sửa (self-correction) rồi mới báo cáo.
-Trả lời bằng tiếng Việt, ngắn gọn, chuẩn Markdown đẹp mắt.
+2. Tự tạo file code và chạy thử bằng terminal để kiểm tra kết quả trước khi báo cáo.
+3. Nếu code gặp lỗi, tự sửa (self-correction) rồi mới gửi kết quả cuối cùng.
+Giao tiếp bằng tiếng Việt, súc tích, định dạng Markdown rõ ràng.
 """
 
 def run_agentic_task(prompt: str) -> str:
@@ -192,7 +212,7 @@ def run_agentic_task(prompt: str) -> str:
     return "Đã hoàn thành các bước xử lý."
 
 # ==========================================
-# 4. THIẾT LẬP DISCORD CLIENT
+# 5. KHỞI CHẠY DISCORD CLIENT
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -201,7 +221,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot Discord đã online với tên: {bot.user.name} ({bot.user.id})")
+    print(f"✅ Bot Discord đã online: {bot.user.name} ({bot.user.id})")
     await bot.change_presence(activity=discord.Game(name="!biva hoặc tag @Biva-AI"))
 
 @bot.event
@@ -225,16 +245,13 @@ async def on_message(message):
                     for i in range(0, len(reply), 1900):
                         await message.reply(reply[i:i+1900])
             except Exception as e:
-                await message.reply(f"❌ Có lỗi xảy ra trong quá trình xử lý: `{str(e)}`")
+                await message.reply(f"❌ Có lỗi: `{str(e)}`")
 
     await bot.process_commands(message)
 
-# ==========================================
-# 5. KHỞI CHẠY BOT
-# ==========================================
 if __name__ == "__main__":
     if not DISCORD_BOT_TOKEN:
-        print("Lỗi: Chưa tìm thấy DISCORD_BOT_TOKEN trong biến môi trường hoặc file .env")
+        print("Lỗi: Thiếu DISCORD_BOT_TOKEN trong Environment Variables.")
     else:
-        print("🚀 Đang khởi động Biva AI trên Discord...")
+        print("🚀 Khởi động Biva AI trên Render...")
         bot.run(DISCORD_BOT_TOKEN)
