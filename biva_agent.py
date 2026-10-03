@@ -1,17 +1,19 @@
 import os
 import json
 import subprocess
+from dotenv import load_dotenv
 from groq import Groq
 
-# 1. Khởi tạo kết nối Groq Cloud an toàn qua biến môi trường
+# 1. Tải biến môi trường và khởi tạo Client an toàn
+load_dotenv()
 API_KEY = os.getenv("GROQ_API_KEY", "dien_api_key_cua_ban_vao_day")
 client = Groq(api_key=API_KEY)
 
-# Sử dụng mô hình suy luận tốt nhất đã kiểm tra thành công
-MODEL_NAME = "qwen/qwen3.8-27b"
+# Sử dụng mô hình hỗ trợ context lớn và Tool Calling tối ưu
+MODEL_NAME = "openai/gpt-oss-120b"
 
 # ==========================================
-# 1. HỆ THỐNG CÔNG CỤ CHUYÊN SÂU (ENGINEERING TOOLS)
+# 2. HỆ THỐNG CÔNG CỤ TỰ HÀNH (TOOLS)
 # ==========================================
 
 def run_command(cmd: str) -> str:
@@ -42,25 +44,24 @@ def read_file(file_path: str) -> str:
 def write_file(file_path: str, content: str) -> str:
     """Tạo mới hoặc ghi nội dung vào file"""
     try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True) if os.path.dirname(file_path) else None
+        dirname = os.path.dirname(file_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Đã ghi thành công file '{file_path}'."
     except Exception as e:
         return f"Không thể ghi file: {str(e)}"
 
-# Schema công cụ khai báo theo chuẩn Agentic Tool Calling
 TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "Thực thi lệnh shell/terminal để kiểm tra thư viện, chạy script Python, hoặc test ứng dụng.",
+            "description": "Thực thi lệnh terminal để kiểm tra file, chạy script Python, hoặc test ứng dụng.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "cmd": {"type": "string", "description": "Câu lệnh terminal."}
-                },
+                "properties": {"cmd": {"type": "string", "description": "Câu lệnh terminal."}},
                 "required": ["cmd"]
             }
         }
@@ -69,12 +70,10 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "Quét toàn bộ cấu trúc thư mục hiện tại để kiểm tra mã nguồn.",
+            "description": "Quét toàn bộ cấu trúc thư mục hiện tại.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Đường dẫn thư mục, mặc định là '.'"}
-                }
+                "properties": {"path": {"type": "string", "description": "Đường dẫn thư mục, mặc định '.'"}}
             }
         }
     },
@@ -85,9 +84,7 @@ TOOLS_SCHEMA = [
             "description": "Đọc nội dung một file cụ thể để tìm lỗi hoặc phân tích logic.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "description": "Đường dẫn file cần đọc."}
-                },
+                "properties": {"file_path": {"type": "string", "description": "Đường dẫn file cần đọc."}},
                 "required": ["file_path"]
             }
         }
@@ -100,7 +97,7 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {"type": "string", "description": "Tên file (ví dụ: main.py, app.py)."},
+                    "file_path": {"type": "string", "description": "Tên file (ví dụ: main.py, test.py)."},
                     "content": {"type": "string", "description": "Nội dung hoàn chỉnh của file."}
                 },
                 "required": ["file_path", "content"]
@@ -117,31 +114,27 @@ TOOL_MAP = {
 }
 
 # ==========================================
-# 2. SYSTEM INSTRUCTION TIÊM PHẨM CHẤT CODEX
+# 3. CHỈ DẪN HỆ THỐNG (SYSTEM INSTRUCTION)
 # ==========================================
-BIVA_PRO_SYSTEM = """
+SYSTEM_PROMPT = """
 Bạn là Biva AI, một AI Agent lập trình và cộng tác kỹ thuật cấp cao, đồng hành cùng Bảo sigma.
 
 Nguyên tắc tự chủ và giải quyết vấn đề:
-1. Định hướng hành động: Khi nhận nhiệm vụ viết code hay sửa lỗi, hãy tự động dùng công cụ để tạo file và chạy thử nghiệm. Không dừng lại ở việc chỉ giải thích suông.
+1. Định hướng hành động: Khi nhận nhiệm vụ viết code hay sửa lỗi, hãy tự động dùng công cụ để tạo file và chạy thử nghiệm.
 2. Vòng lặp tự sửa lỗi: Nếu chạy lệnh kiểm thử phát hiện lỗi (traceback, syntax error), tự động đọc lại file, chỉnh sửa và chạy lại cho đến khi chương trình hoạt động hoàn chỉnh.
-3. Phong cách giao tiếp:
-   - Nói thẳng vào trọng tâm ở câu đầu tiên.
-   - Không mở đầu bằng các lời chào rập khuôn, không tâng bốc.
-   - Tuyệt đối không dùng từ ngữ sáo rỗng. Báo cáo ngắn gọn những gì đã thực hiện và kết quả xác thực.
+3. Phong cách giao tiếp: Đi thẳng vào kết quả, ngắn gọn và chính xác.
 """
 
 # ==========================================
-# 3. VÒNG LẶP SUY LUẬN & THỰC THI (REACT AGENT)
+# 4. VÒNG LẶP SUY LUẬN & THỰC THI (AGENTIC LOOP)
 # ==========================================
 class BivaAgentPro:
     def __init__(self):
-        self.history = [{"role": "system", "content": BIVA_PRO_SYSTEM}]
+        self.history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     def execute_task(self, prompt: str) -> str:
         self.history.append({"role": "user", "content": prompt})
 
-        # Cho phép AI tự thực hiện tối đa 8 bước xử lý liên tiếp để hoàn thành nhiệm vụ phức tạp
         for step in range(8):
             response = client.chat.completions.create(
                 model=MODEL_NAME,
@@ -161,7 +154,7 @@ class BivaAgentPro:
 
                     print(f"⚡ [Biva Action - Bước {step+1}]: {func_name}({args})")
                     action_result = TOOL_MAP[func_name](**args)
-                    print(f"👉 [Kết quả hệ thống]: {action_result}\n")
+                    print(f"👉 [Kết quả]: {action_result}\n")
 
                     self.history.append({
                         "role": "tool",
@@ -174,12 +167,12 @@ class BivaAgentPro:
         return "Nhiệm vụ đã hoàn tất qua nhiều bước xử lý tự động."
 
 # ==========================================
-# 4. CHẠY THỬ NGHIỆM TƯƠNG TÁC
+# 5. ĐIỀU KHIỂN TƯƠNG TÁC
 # ==========================================
 if __name__ == "__main__":
     biva = BivaAgentPro()
     print("=" * 60)
-    print("🦾 BIVA AI PRO (BẢN TỰ HÀNH TOÀN NĂNG) SẴN SÀNG!")
+    print("🦾 BIVA AI PRO (AGENT TỰ HÀNH) ĐÃ SẴN SÀNG!")
     print("=" * 60)
 
     while True:
@@ -197,4 +190,4 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(f"\n[Lỗi ngoại lệ]: {e}")
+            print(f"\n[Lỗi]: {e}")
