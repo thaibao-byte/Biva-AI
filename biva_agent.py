@@ -117,7 +117,7 @@ class BivaAgent:
         # Vòng lặp tự hành tối đa 5 bước liên tiếp để AI tự giải quyết công việc
         for _ in range(5):
             response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="qwen/qwen3.8-27b",
                 messages=self.messages,
                 tools=TOOLS_SCHEMA,
                 tool_choice="auto",
